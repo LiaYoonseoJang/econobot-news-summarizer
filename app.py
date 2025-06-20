@@ -2,57 +2,67 @@ import streamlit as st
 from newspaper import Article
 import openai
 import os
-from dotenv import load_dotenv
+import json
+from collections import Counter
 
-# Load API key
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# Title
+
 st.title("📊 EconoBot: Economic News Summarizer")
 st.write("Paste a news article URL to get a plain-English summary of economic themes.")
 
-# Sidebar History Panel
+for key in ["summary", "article_url", "content", "history"]:
+    if key not in st.session_state:
+        st.session_state[key] = [] if key == "history" else None
+
 with st.sidebar:
     st.subheader("📚 Summary History")
-    if "history" in st.session_state and st.session_state.history:
+    if st.session_state.history:
         for i, item in enumerate(reversed(st.session_state.history[-5:])):
             with st.expander(f"Article {len(st.session_state.history) - i}"):
-                st.markdown(f"🔗 [{item['url']}]({item['url']})")
-                st.write(item["summary"][:500] + "...")
+                st.markdown(f"[{item['url']}]({item['url']})")
+                st.write(item["summary"][:400] + "...")
     else:
         st.info("No summaries yet.")
 
-# Input URL
+    st.markdown("---")
+    st.subheader("📊 Mini Dashboard")
+    if st.session_state.history:
+        total = len(st.session_state.history)
+        sentiments = [item["sentiment"] for item in st.session_state.history]
+        impact_scores = [item["impact_score"] for item in st.session_state.history if isinstance(item["impact_score"], (int, float))]
+        all_topics = [t for item in st.session_state.history for t in item.get("topics", [])]
+        topic_counts = Counter(all_topics).most_common(3)
+
+        st.write(f"Articles summarized: **{total}**")
+        st.write(f"Avg. Impact Score: **{round(sum(impact_scores)/len(impact_scores), 1)}**" if impact_scores else "No impact data yet")
+        st.write(f" Most common sentiment: **{Counter(sentiments).most_common(1)[0][0]}**")
+        st.write("Top Topics:")
+        for topic, count in topic_counts:
+            st.markdown(f"- **{topic}** ({count})")
+    else:
+        st.info("No dashboard data yet.")
+
 url = st.text_input("🔗 Paste the URL of a news article to summarize:")
-
-# Session state setup
-if "summary" not in st.session_state:
-    st.session_state.summary = None
-if "article_url" not in st.session_state:
-    st.session_state.article_url = None
-if "content" not in st.session_state:
-    st.session_state.content = None
-if "history" not in st.session_state:
-    st.session_state.history = []
-
 if url:
     st.session_state.article_url = url
 
-# Summarize logic
 if st.button("Summarize") and st.session_state.article_url:
     try:
-        article = Article(st.session_state.article_url)
+        article = Article(
+            st.session_state.article_url,
+            browser_user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        )
         article.download()
         article.parse()
         content = article.text
         st.session_state.content = content
 
         if len(content) < 300:
-            st.error("❌ Article too short or blocked. Try a different source.")
+            st.error("Article too short or blocked. Try a different source.")
             st.stop()
 
-        st.subheader("📰 Article Preview")
+        st.subheader("Article Preview")
         st.write(content[:700] + "...")
 
         prompt = f"""
@@ -68,36 +78,58 @@ if st.button("Summarize") and st.session_state.article_url:
         {content}
         """
 
-        with st.spinner("🧠 Summarizing with GPT..."):
+        with st.spinner("Summarizing with GPT..."):
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
                 max_tokens=500
             )
-            st.session_state.summary = response['choices'][0]['message']['content']
+            summary = response['choices'][0]['message']['content']
+            st.session_state.summary = summary
 
-        # Save to history
+        metadata_prompt = f"""
+        From the article below, extract:
+        1. The main economic topic(s) (max 2).
+        2. The sentiment (Positive, Neutral, or Negative).
+        3. An impact score from 1 to 10.
+
+        Respond in JSON format like:
+        {{"topics": ["Inflation", "Trade"], "sentiment": "Positive", "impact_score": 7}}
+
+        Article:
+        {content}
+        """
+
+        metadata_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": metadata_prompt}],
+            temperature=0.4,
+            max_tokens=150
+        )
+        metadata = json.loads(metadata_response['choices'][0]['message']['content'])
+
         st.session_state.history.append({
             "url": st.session_state.article_url,
-            "summary": st.session_state.summary
+            "summary": summary,
+            "topics": metadata.get("topics", []),
+            "sentiment": metadata.get("sentiment", "Unknown"),
+            "impact_score": metadata.get("impact_score", 0)
         })
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"Error: {e}")
 
-# Display summary and extras
 if st.session_state.summary:
     summary = st.session_state.summary
     content = st.session_state.content
 
-    st.subheader("💬 EconoBot Summary")
+    st.subheader("EconoBot Summary")
     st.write(summary)
 
-    # 🌍 Translation
-    language = st.selectbox("🌍 Translate summary to another language:", ["None", "Korean", "Chinese", "Spanish", "French"])
+    language = st.selectbox("Translate summary to another language:", ["None", "Korean", "Chinese", "Spanish", "French"])
     if language != "None":
-        with st.spinner(f"🔄 Translating into {language}..."):
+        with st.spinner(f"Translating into {language}..."):
             translation = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": f"Translate this into {language}:\n\n{summary}"}],
@@ -105,12 +137,11 @@ if st.session_state.summary:
                 max_tokens=500
             )
             translated_text = translation['choices'][0]['message']['content']
-            st.subheader(f"🌐 {language} Translation")
+            st.subheader(f"{language} Translation")
             st.write(translated_text)
 
-    # 🧠 Ask a Question
-    st.subheader("🧠 Ask a Question About the Article")
-    user_question = st.text_input("❓ Enter your question:")
+    st.subheader("Ask a Question About the Article")
+    user_question = st.text_input("Enter your question:")
     if user_question and content:
         with st.spinner("Thinking..."):
             question_prompt = f"""
@@ -129,8 +160,7 @@ if st.session_state.summary:
                 max_tokens=300
             )
             answer = response['choices'][0]['message']['content']
-            st.markdown("🧾 **Answer:**")
+            st.markdown("**Answer:**")
             st.write(answer)
 
-    # 📄 Download button
-    st.download_button("📄 Download English Summary", summary, file_name="econobot_summary.txt")
+    st.download_button("Download English Summary", summary, file_name="econobot_summary.txt")
