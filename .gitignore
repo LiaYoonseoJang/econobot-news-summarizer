@@ -1,1 +1,2 @@
 echo ".env" >> .gitignore
+.streamlit/secrets.toml
