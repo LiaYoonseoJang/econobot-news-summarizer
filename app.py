@@ -1,13 +1,17 @@
 import streamlit as st
+import time 
 from newspaper import Article
 import openai
 import os
 import json
 from collections import Counter
 
+
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-
+with st.spinner("⏳ The app is waking up... please wait a few seconds."):
+    time.sleep(2)  # simulate loading delay (2–3 seconds is enough)
+    
 st.title("📊 EconoBot: Economic News Summarizer")
 st.write("Paste a news article URL to get a plain-English summary of economic themes.")
 
